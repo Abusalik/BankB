@@ -4,12 +4,8 @@ import os
 import sqlite3
 from contextlib import contextmanager
 
-try:
-    import psycopg2
-    from psycopg2.extras import RealDictCursor
-except ImportError:  # pragma: no cover - optional dependency for local runs
-    psycopg2 = None
-    RealDictCursor = None
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, "database", "bankingai.db")
@@ -146,8 +142,6 @@ def init_db():
 def get_connection():
     """Provide a database connection for SQLite or PostgreSQL."""
     if _is_postgres():
-        if psycopg2 is None:
-            raise RuntimeError("psycopg2 is required when DATABASE_URL is set")
         conn = psycopg2.connect(DATABASE_URL)
         conn.cursor_factory = RealDictCursor
         try:

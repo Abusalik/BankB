@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - BankingAI{% endblock %}
+
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Dashboard</h1>
+    <p>Welcome back! Here's an overview of your activity.</p>
+</div>
+
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-icon gold">&#9733;</div>
+        <div class="stat-value" id="totalLoans">0</div>
+        <div class="stat-label">Loan Predictions</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon blue">&#9888;</div>
+        <div class="stat-value" id="totalFraud">0</div>
+        <div class="stat-label">Fraud Checks</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon green">&#10003;</div>
+        <div class="stat-value" id="approvedLoans">0</div>
+        <div class="stat-label">Loans Approved</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon red">&#9888;</div>
+        <div class="stat-value" id="fraudDetected">0</div>
+        <div class="stat-label">Fraud Detected</div>
+    </div>
+</div>
+
+<div class="grid-2">
+    <div class="card">
+        <h3 class="card-title">Loan Approval Overview</h3>
+        <div class="chart-container">
+            <canvas id="loanChart"></canvas>
+        </div>
+    </div>
+    <div class="card">
+        <h3 class="card-title">Fraud Detection Overview</h3>
+        <div class="chart-container">
+            <canvas id="fraudChart"></canvas>
+        </div>
+    </div>
+</div>
+
+<div class="grid-2" style="margin-top: 1.5rem;">
+    <div class="card">
+        <h3 class="card-title">Recent Loan Predictions</h3>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr><th>Date</th><th>Result</th><th>Confidence</th></tr>
+                </thead>
+                <tbody id="loanTableBody"></tbody>
+            </table>
+        </div>
+    </div>
+    <div class="card">
+        <h3 class="card-title">Recent Fraud Checks</h3>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr><th>Date</th><th>Result</th><th>Risk Score</th></tr>
+                </thead>
+                <tbody id="fraudTableBody"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/frontend/js/dashboard.js"></script>
+{% endblock %}

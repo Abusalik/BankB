@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}AI Chatbot - BankingAI{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>AI Banking Assistant</h1>
+    <p>Ask about loan predictions, fraud detection, and banking FAQs.</p>
+</div>
+
+<div class="card chat-container">
+    <div class="chat-suggestions">
+        <span class="suggestion-chip">How to improve loan approval?</span>
+        <span class="suggestion-chip">What is the interest rate?</span>
+        <span class="suggestion-chip">Explain my loan prediction</span>
+        <span class="suggestion-chip">What documents are needed?</span>
+        <span class="suggestion-chip">How to protect against fraud?</span>
+    </div>
+
+    <div class="chat-messages" id="chatMessages"></div>
+
+    <form id="chatForm" class="chat-input-area">
+        <input type="text" id="chatInput" placeholder="Ask me anything about banking..." autocomplete="off">
+        <button type="submit" class="btn btn-primary" style="width: auto; padding: 0.6rem 1.2rem;">Send</button>
+    </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/frontend/js/chat.js"></script>
+{% endblock %}

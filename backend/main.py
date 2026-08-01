@@ -37,8 +37,6 @@ from backend.schemas import (
 )
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PROJECT_ROOT = os.path.dirname(BASE_DIR)
-FRONTEND_ROOT = os.path.join(PROJECT_ROOT, "frontend_repo")
 
 app = FastAPI(
     title="BankingAI",
@@ -54,25 +52,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-static_dir = os.path.join(BASE_DIR, "static")
-frontend_dir = os.path.join(BASE_DIR, "frontend")
-templates_dir = os.path.join(BASE_DIR, "templates")
-
-if not os.path.isdir(static_dir) and os.path.isdir(os.path.join(FRONTEND_ROOT, "static")):
-    static_dir = os.path.join(FRONTEND_ROOT, "static")
-if not os.path.isdir(frontend_dir) and os.path.isdir(os.path.join(FRONTEND_ROOT, "frontend")):
-    frontend_dir = os.path.join(FRONTEND_ROOT, "frontend")
-if not os.path.isdir(templates_dir) and os.path.isdir(os.path.join(FRONTEND_ROOT, "templates")):
-    templates_dir = os.path.join(FRONTEND_ROOT, "templates")
-
-if os.path.isdir(static_dir):
-    app.mount("/static", StaticFiles(directory=static_dir), name="static")
-if os.path.isdir(frontend_dir):
-    app.mount("/frontend", StaticFiles(directory=frontend_dir), name="frontend")
-if os.path.isdir(templates_dir):
-    templates = Jinja2Templates(directory=templates_dir)
-else:
-    templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
+app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
+app.mount("/frontend", StaticFiles(directory=os.path.join(BASE_DIR, "frontend")), name="frontend")
+templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
 security = HTTPBearer(auto_error=False)
 

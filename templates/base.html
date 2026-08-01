@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}BankingAI{% endblock %}</title>
+    <link rel="stylesheet" href="/frontend/css/style.css">
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <button class="menu-toggle" id="menuToggle">&#9776;</button>
+    
+
+    <div class="app-layout">
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-brand">BankingAI</div>
+            <ul class="sidebar-nav">
+                <li><a href="/dashboard">&#9632; Dashboard</a></li>
+                <li><a href="/loan">&#9733; Loan Prediction</a></li>
+                <li><a href="/fraud">&#9888; Fraud Detection</a></li>
+                <li><a href="/chat">&#9993; AI Chatbot</a></li>
+                <li><a href="/history">&#128337; History</a></li>
+            </ul>
+            <div class="sidebar-footer">
+                <p style="font-size: 0.85rem; color: rgba(255,255,255,0.5); margin-bottom: 0.5rem;">
+                    Signed in as <strong id="userDisplay" style="color: var(--gold-light);">User</strong>
+                </p>
+                <a href="#" id="logoutBtn" class="btn btn-secondary" style="width: 100%; font-size: 0.85rem; padding: 0.6rem;">
+                    Sign Out
+                </a>
+            </div>
+        </aside>
+
+        <main class="main-content">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+
+    <script src="/frontend/js/app.js"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>
