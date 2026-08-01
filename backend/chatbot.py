@@ -1,4 +1,4 @@
-"""AI Chatbot using Hugging Face InferenceClient with local fallback."""
+"""AI Chatbot using Hugging Face Inference Providers with local fallback."""
 
 import asyncio
 import logging
@@ -7,7 +7,7 @@ from functools import partial
 
 logger = logging.getLogger("bankingai")
 
-# Models to try in order (small models that work on free serverless inference)
+# Models to try - these work with inference providers (conversational task)
 HF_MODELS = [
     "mistralai/Mistral-7B-Instruct-v0.2",
     "HuggingFaceH4/zephyr-7b-beta",
@@ -96,74 +96,130 @@ def get_token() -> str:
     return ""
 
 
-def _sync_hf_call(model_name: str, messages: list, hf_token: str) -> str | None:
-    """Synchronous call using huggingface_hub InferenceClient."""
+# ---------- Strategy 1: InferenceClient with provider="auto" ----------
+
+def _sync_hf_chat_auto_provider(model_name: str, messages: list, hf_token: str) -> str | None:
+    """Use InferenceClient with provider='auto' so HF picks the right backend."""
     try:
         from huggingface_hub import InferenceClient
 
-        client = InferenceClient(model=model_name, token=hf_token, timeout=30)
+        client = InferenceClient(provider="auto", api_key=hf_token, timeout=30)
         response = client.chat_completion(
+            model=model_name,
             messages=messages,
             max_tokens=250,
             temperature=0.7,
         )
         text = response.choices[0].message.content.strip()
         if text:
-            logger.info("HF InferenceClient (%s) success", model_name)
+            logger.info("HF auto-provider (%s) success", model_name)
             return text
     except Exception as err:
-        err_str = str(err)
-        logger.warning("HF InferenceClient (%s) error: %s", model_name, err_str[:200])
+        logger.warning("HF auto-provider (%s) error: %s", model_name, str(err)[:200])
     return None
 
 
-def _sync_hf_text_generation(model_name: str, prompt: str, hf_token: str) -> str | None:
-    """Synchronous call using huggingface_hub text_generation (fallback)."""
-    try:
-        from huggingface_hub import InferenceClient
+# ---------- Strategy 2: InferenceClient with explicit provider ----------
 
-        client = InferenceClient(model=model_name, token=hf_token, timeout=30)
-        response = client.text_generation(
-            prompt,
-            max_new_tokens=250,
-            temperature=0.7,
-        )
-        text = response.strip()
-        if text:
-            logger.info("HF text_generation (%s) success", model_name)
-            return text
-    except Exception as err:
-        err_str = str(err)
-        logger.warning("HF text_generation (%s) error: %s", model_name, err_str[:200])
+PROVIDERS = ["featherless-ai", "fireworks-ai", "together", "novita"]
+
+def _sync_hf_chat_explicit_provider(
+    model_name: str, messages: list, hf_token: str
+) -> str | None:
+    """Try each known provider explicitly."""
+    from huggingface_hub import InferenceClient
+
+    for provider in PROVIDERS:
+        try:
+            client = InferenceClient(provider=provider, api_key=hf_token, timeout=30)
+            response = client.chat_completion(
+                model=model_name,
+                messages=messages,
+                max_tokens=250,
+                temperature=0.7,
+            )
+            text = response.choices[0].message.content.strip()
+            if text:
+                logger.info("HF provider=%s model=%s success", provider, model_name)
+                return text
+        except Exception as err:
+            logger.debug("HF provider=%s model=%s error: %s", provider, model_name, str(err)[:150])
+            continue
     return None
 
 
-def _sync_requests_fallback(prompt: str, hf_token: str) -> str | None:
-    """Last-resort fallback using requests library directly."""
+# ---------- Strategy 3: Raw HTTPS to router.huggingface.co ----------
+
+def _sync_raw_router_call(messages: list, hf_token: str) -> str | None:
+    """Direct HTTP call to router.huggingface.co which IS reachable from Render."""
     import requests
+
+    url = "https://router.huggingface.co/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {hf_token}",
+        "Content-Type": "application/json",
+    }
 
     for model_name in HF_MODELS:
         try:
-            url = f"https://api-inference.huggingface.co/models/{model_name}"
-            headers = {
-                "Authorization": f"Bearer {hf_token}",
-                "Content-Type": "application/json",
-                "x-wait-for-model": "true",
-            }
             payload = {
-                "inputs": prompt,
-                "parameters": {"max_new_tokens": 250, "temperature": 0.7, "return_full_text": False},
+                "model": model_name,
+                "messages": messages,
+                "max_tokens": 250,
+                "temperature": 0.7,
+                "stream": False,
             }
             res = requests.post(url, json=payload, headers=headers, timeout=30)
-            logger.info("requests fallback (%s) status=%s", model_name, res.status_code)
+            logger.info("Raw router (%s) status=%s", model_name, res.status_code)
             if res.status_code == 200:
-                result = res.json()
-                if isinstance(result, list) and result:
-                    text = result[0].get("generated_text", "").strip()
+                data = res.json()
+                text = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                if text:
+                    return text
+        except Exception as err:
+            logger.warning("Raw router (%s) error: %s", model_name, str(err)[:200])
+    return None
+
+
+# ---------- Strategy 4: Raw HTTPS to provider endpoints directly ----------
+
+PROVIDER_ENDPOINTS = [
+    ("featherless-ai", "https://router.huggingface.co/featherless-ai/v1/chat/completions"),
+    ("fireworks-ai", "https://router.huggingface.co/fireworks-ai/v1/chat/completions"),
+    ("novita", "https://router.huggingface.co/novita/v1/chat/completions"),
+]
+
+def _sync_raw_provider_call(messages: list, hf_token: str) -> str | None:
+    """Try specific provider endpoints through the router."""
+    import requests
+
+    headers = {
+        "Authorization": f"Bearer {hf_token}",
+        "Content-Type": "application/json",
+    }
+
+    for provider_name, endpoint_url in PROVIDER_ENDPOINTS:
+        for model_name in HF_MODELS[:2]:  # Try first 2 models per provider
+            try:
+                payload = {
+                    "model": model_name,
+                    "messages": messages,
+                    "max_tokens": 250,
+                    "temperature": 0.7,
+                    "stream": False,
+                }
+                res = requests.post(endpoint_url, json=payload, headers=headers, timeout=30)
+                logger.info("Provider %s (%s) status=%s", provider_name, model_name, res.status_code)
+                if res.status_code == 200:
+                    data = res.json()
+                    text = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
                     if text:
                         return text
-        except Exception as err:
-            logger.warning("requests fallback (%s) error: %s", model_name, str(err)[:200])
+                elif res.status_code in (401, 403):
+                    logger.warning("Auth error on %s: %s", provider_name, res.text[:100])
+                    break  # Don't try more models with same provider if auth fails
+            except Exception as err:
+                logger.warning("Provider %s (%s) error: %s", provider_name, model_name, str(err)[:200])
     return None
 
 
@@ -192,26 +248,32 @@ async def get_chat_response(message: str, context: dict | None = None) -> str:
 
     loop = asyncio.get_event_loop()
 
-    # Strategy 1: Try chat_completion via InferenceClient (each model)
+    # Strategy 1: InferenceClient with provider="auto"
     for model_name in HF_MODELS:
         result = await loop.run_in_executor(
-            None, partial(_sync_hf_call, model_name, messages, hf_token)
+            None, partial(_sync_hf_chat_auto_provider, model_name, messages, hf_token)
         )
         if result:
             return result
 
-    # Strategy 2: Try text_generation via InferenceClient
-    prompt = f"<s>[INST] {system_prompt}{context_text}\n\nUser: {message} [/INST]"
-    for model_name in HF_MODELS[:2]:  # Try first 2 models
+    # Strategy 2: InferenceClient with explicit providers
+    for model_name in HF_MODELS[:2]:
         result = await loop.run_in_executor(
-            None, partial(_sync_hf_text_generation, model_name, prompt, hf_token)
+            None, partial(_sync_hf_chat_explicit_provider, model_name, messages, hf_token)
         )
         if result:
             return result
 
-    # Strategy 3: Try raw requests library (different HTTP stack from httpx)
+    # Strategy 3: Raw HTTP to router.huggingface.co (which is reachable)
     result = await loop.run_in_executor(
-        None, partial(_sync_requests_fallback, prompt, hf_token)
+        None, partial(_sync_raw_router_call, messages, hf_token)
+    )
+    if result:
+        return result
+
+    # Strategy 4: Raw HTTP to specific provider endpoints
+    result = await loop.run_in_executor(
+        None, partial(_sync_raw_provider_call, messages, hf_token)
     )
     if result:
         return result
