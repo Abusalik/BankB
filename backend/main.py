@@ -52,9 +52,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
-app.mount("/frontend", StaticFiles(directory=os.path.join(BASE_DIR, "frontend")), name="frontend")
-templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
+static_dir = os.path.join(BASE_DIR, "static")
+frontend_dir = os.path.join(BASE_DIR, "frontend")
+templates_dir = os.path.join(BASE_DIR, "templates")
+
+if os.path.isdir(static_dir):
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+if os.path.isdir(frontend_dir):
+    app.mount("/frontend", StaticFiles(directory=frontend_dir), name="frontend")
+
+templates = Jinja2Templates(directory=templates_dir)
 
 security = HTTPBearer(auto_error=False)
 
