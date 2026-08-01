@@ -1,11 +1,13 @@
 """AI Chatbot using Hugging Face Inference API with local fallback."""
 
+import logging
 import os
-
 import httpx
 
-HF_API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
-HF_TOKEN = os.getenv("HF_TOKEN", "")
+logger = logging.getLogger("bankingai")
+
+HF_ROUTER_URL = "https://router.huggingface.co/hf-inference/v1/chat/completions"
+HF_DIRECT_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3"
 
 BANKING_FAQ = {
     "interest rate": (
@@ -80,8 +82,11 @@ def _local_response(message: str, context: dict | None = None) -> str:
 
 
 async def get_chat_response(message: str, context: dict | None = None) -> str:
-    """Get chatbot response from Hugging Face or local fallback."""
-    if not HF_TOKEN:
+    """Get chatbot response from Hugging Face API or local fallback."""
+    hf_token = os.getenv("HF_TOKEN", "").strip()
+
+    if not hf_token:
+        logger.info("HF_TOKEN environment variable is not set. Using local FAQ fallback.")
         return _local_response(message, context)
 
     system_prompt = (
@@ -92,30 +97,65 @@ async def get_chat_response(message: str, context: dict | None = None) -> str:
         "Keep responses under 150 words."
     )
 
-    context_text = ""
-    if context:
-        context_text = f"\nUser context: {context}"
+    context_text = f"\nUser Context: {context}" if context else ""
+    user_prompt = f"{system_prompt}{context_text}\n\nUser Question: {message}"
 
-    payload = {
-        "inputs": (
-            f"<s>[INST] {system_prompt}{context_text}\n\n"
-            f"User: {message} [/INST]"
-        ),
+    headers = {
+        "Authorization": f"Bearer {hf_token}",
+        "Content-Type": "application/json",
+    }
+
+    # Attempt 1: Hugging Face Serverless Router Chat Completions API
+    router_payload = {
+        "model": "mistralai/Mistral-7B-Instruct-v0.3",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"{message}{context_text}"},
+        ],
+        "max_tokens": 200,
+        "temperature": 0.7,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.post(HF_ROUTER_URL, json=router_payload, headers=headers)
+            if res.status_code == 200:
+                data = res.json()
+                if "choices" in data and len(data["choices"]) > 0:
+                    content = data["choices"][0].get("message", {}).get("content", "").strip()
+                    if content:
+                        return content
+            else:
+                logger.warning(
+                    "HuggingFace Router API status %s: %s", res.status_code, res.text[:200]
+                )
+    except Exception as err:
+        logger.warning("HuggingFace Router API connection error: %s", err)
+
+    # Attempt 2: Direct Model Inference API
+    direct_payload = {
+        "inputs": f"<s>[INST] {user_prompt} [/INST]",
         "parameters": {"max_new_tokens": 200, "temperature": 0.7},
     }
 
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(HF_API_URL, json=payload, headers=headers)
-            if response.status_code == 200:
-                result = response.json()
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.post(HF_DIRECT_URL, json=direct_payload, headers=headers)
+            if res.status_code == 200:
+                result = res.json()
                 if isinstance(result, list) and result:
                     text = result[0].get("generated_text", "")
                     if "[/INST]" in text:
-                        return text.split("[/INST]")[-1].strip()
-                    return text.strip()
-            return _local_response(message, context)
-    except Exception:
-        return _local_response(message, context)
+                        text = text.split("[/INST]")[-1]
+                    text = text.strip()
+                    if text:
+                        return text
+            else:
+                logger.warning(
+                    "HuggingFace Direct API status %s: %s", res.status_code, res.text[:200]
+                )
+    except Exception as err:
+        logger.warning("HuggingFace Direct API connection error: %s", err)
+
+    logger.info("HuggingFace API calls unfulfilled. Falling back to local FAQ response.")
+    return _local_response(message, context)
