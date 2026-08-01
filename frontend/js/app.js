@@ -43,9 +43,25 @@ const API = {
             return null;
         }
 
-        const data = await response.json();
+        const contentType = response.headers.get("content-type") || "";
+        let data;
+
+        if (contentType.includes("application/json")) {
+            data = await response.json();
+        } else {
+            const text = await response.text();
+            try {
+                data = JSON.parse(text);
+            } catch {
+                if (!response.ok) {
+                    throw new Error(text || "Request failed");
+                }
+                throw new Error("Unexpected response format from server");
+            }
+        }
+
         if (!response.ok) {
-            throw new Error(data.detail || "Request failed");
+            throw new Error(data.detail || data.error || JSON.stringify(data));
         }
         return data;
     },
