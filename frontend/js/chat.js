@@ -35,9 +35,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
         try {
             const result = await API.post("/chat", { message, context });
-            addBotMessage(result.response);
+            if (result && result.response) {
+                addBotMessage(result.response);
+            }
         } catch (err) {
-            addBotMessage("Sorry, I couldn't process your request. Please try again.");
+            addBotMessage(err.message || "Sorry, I couldn't process your request. Please try again.");
         }
     });
 });

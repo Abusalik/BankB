@@ -60,7 +60,7 @@ const API = {
         if (response.status === 401) {
             this.clearAuth();
             window.location.href = "/";
-            return null;
+            throw new Error("Session expired. Please sign in again.");
         }
 
         if (!response.ok && window.location.hostname.includes("onrender.com") && (API_BASE_URL === window.location.origin)) {
