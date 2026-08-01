@@ -1,12 +1,13 @@
 """FastAPI application entry point for BankingAI."""
 
 import json
+import logging
 import os
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -44,9 +45,17 @@ app = FastAPI(
     version="1.0.0",
 )
 
+allowed_origins = [
+    os.getenv("FRONTEND_URL", "").rstrip("/"),
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
+allowed_origins = [origin for origin in allowed_origins if origin]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
+    allow_origin_regex=r"https://.*\.onrender\.com",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -64,11 +73,32 @@ if os.path.isdir(frontend_dir):
 templates = Jinja2Templates(directory=templates_dir)
 
 security = HTTPBearer(auto_error=False)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("bankingai")
 
 
 @app.on_event("startup")
 def startup():
     init_db()
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(status_code=exc.status_code, content={"success": False, "message": exc.detail})
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled exception on %s: %s", request.url.path, exc)
+    err_msg = str(exc) or "Internal Server Error"
+    return JSONResponse(status_code=500, content={"success": False, "detail": err_msg, "message": err_msg})
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    logger.info("%s %s", request.method, request.url.path)
+    response = await call_next(request)
+    return response
 
 
 def get_current_user(
@@ -93,6 +123,15 @@ def get_user_id(payload: dict) -> int:
     if user_id is None:
         raise HTTPException(status_code=401, detail="Invalid token payload")
     return int(user_id)
+
+
+def _format_row(row) -> dict:
+    if not row:
+        return {}
+    d = dict(row)
+    if "created_at" in d and d["created_at"] is not None:
+        d["created_at"] = str(d["created_at"])
+    return d
 
 
 # --- Page Routes ---
@@ -146,18 +185,24 @@ async def register(user: UserRegister):
             raise HTTPException(status_code=400, detail="Username or email already exists")
 
         password_hash = hash_password(user.password)
-        cursor.execute(
-            _prepare_query(
+        if _is_postgres():
+            cursor.execute(
+                "INSERT INTO users (username, email, password_hash) VALUES (%s, %s, %s) RETURNING id",
+                (user.username, user.email, password_hash),
+            )
+            row = cursor.fetchone()
+            user_id = row["id"] if isinstance(row, dict) else row[0]
+        else:
+            cursor.execute(
                 "INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)",
-                _is_postgres(),
-            ),
-            (user.username, user.email, password_hash),
-        )
+                (user.username, user.email, password_hash),
+            )
+            user_id = cursor.lastrowid
         conn.commit()
-        user_id = cursor.lastrowid
 
     token = create_access_token({"sub": user.username, "user_id": user_id})
     return TokenResponse(access_token=token, username=user.username)
+
 
 
 @app.post("/login", response_model=TokenResponse)
@@ -281,7 +326,7 @@ async def dashboard_data(payload: Annotated[dict, Depends(get_current_user)]):
             ),
             (user_id,),
         )
-        loan_history = [dict(row) for row in cursor.fetchall()]
+        loan_history = [_format_row(row) for row in cursor.fetchall()]
 
         cursor.execute(
             _prepare_query(
@@ -291,7 +336,7 @@ async def dashboard_data(payload: Annotated[dict, Depends(get_current_user)]):
             ),
             (user_id,),
         )
-        fraud_history = [dict(row) for row in cursor.fetchall()]
+        fraud_history = [_format_row(row) for row in cursor.fetchall()]
 
         cursor.execute(
             _prepare_query(
@@ -301,7 +346,7 @@ async def dashboard_data(payload: Annotated[dict, Depends(get_current_user)]):
             ),
             (user_id,),
         )
-        chat_history = [dict(row) for row in cursor.fetchall()]
+        chat_history = [_format_row(row) for row in cursor.fetchall()]
 
         cursor.execute(
             _prepare_query("SELECT COUNT(*) as count FROM loan_history WHERE user_id = ?", _is_postgres()),
@@ -361,7 +406,7 @@ async def full_history(payload: Annotated[dict, Depends(get_current_user)]):
             ),
             (user_id,),
         )
-        loans = [dict(row) for row in cursor.fetchall()]
+        loans = [_format_row(row) for row in cursor.fetchall()]
 
         cursor.execute(
             _prepare_query(
@@ -371,7 +416,7 @@ async def full_history(payload: Annotated[dict, Depends(get_current_user)]):
             ),
             (user_id,),
         )
-        frauds = [dict(row) for row in cursor.fetchall()]
+        frauds = [_format_row(row) for row in cursor.fetchall()]
 
         cursor.execute(
             _prepare_query(
@@ -381,7 +426,7 @@ async def full_history(payload: Annotated[dict, Depends(get_current_user)]):
             ),
             (user_id,),
         )
-        chats = [dict(row) for row in cursor.fetchall()]
+        chats = [_format_row(row) for row in cursor.fetchall()]
 
     return {"loans": loans, "frauds": frauds, "chats": chats}
 

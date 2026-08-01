@@ -4,12 +4,16 @@ import os
 import sqlite3
 from contextlib import contextmanager
 
-import psycopg2
-from psycopg2.extras import RealDictCursor
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+except ImportError:  # pragma: no cover - defensive for Render build/runtime drift
+    psycopg2 = None
+    RealDictCursor = None
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, "database", "bankingai.db")
-DATABASE_URL = os.getenv("DATABASE_URL", "")
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
 
 def _prepare_query(query: str, is_postgres: bool) -> str:
@@ -26,6 +30,8 @@ def _is_postgres() -> bool:
 def init_db():
     """Create database tables if they do not exist."""
     if _is_postgres():
+        if psycopg2 is None:
+            return
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -138,11 +144,21 @@ def init_db():
         conn.commit()
 
 
+def get_postgres_url() -> str:
+    url = DATABASE_URL
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
+    return url
+
+
 @contextmanager
 def get_connection():
     """Provide a database connection for SQLite or PostgreSQL."""
     if _is_postgres():
-        conn = psycopg2.connect(DATABASE_URL)
+        if psycopg2 is None:
+            raise RuntimeError("psycopg2 is required when DATABASE_URL is configured")
+        url = get_postgres_url()
+        conn = psycopg2.connect(url)
         conn.cursor_factory = RealDictCursor
         try:
             yield conn
@@ -156,3 +172,4 @@ def get_connection():
         yield conn
     finally:
         conn.close()
+

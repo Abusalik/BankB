@@ -2,6 +2,13 @@
  * BankingAI - Shared JavaScript utilities
  */
 
+const API_BASE_URL = (() => {
+    const configured = (window.BANKINGAI_CONFIG?.backendUrl || "").trim();
+    if (configured) return configured.replace(/\/$/, "");
+    const fallback = (window.__BACKEND_URL__ || "").trim();
+    return fallback ? fallback.replace(/\/$/, "") : window.location.origin;
+})();
+
 const API = {
     token: localStorage.getItem("token"),
     username: localStorage.getItem("username"),
@@ -32,15 +39,32 @@ const API = {
     },
 
     async request(url, options = {}) {
-        const response = await fetch(url, {
-            ...options,
-            headers: { ...this.headers(), ...options.headers },
-        });
+        const backendUrl = API_BASE_URL.replace(/\/$/, "");
+        const requestUrl = url.match(/^https?:\/\//i)
+            ? url
+            : `${backendUrl}${url}`;
+
+        let response;
+        try {
+            response = await fetch(requestUrl, {
+                ...options,
+                headers: { ...this.headers(), ...options.headers },
+            });
+        } catch (fetchErr) {
+            if (window.location.hostname.includes("onrender.com") && (!API_BASE_URL || API_BASE_URL === window.location.origin)) {
+                throw new Error("Backend connection failed: BACKEND_URL environment variable is missing or invalid on Render. Set BACKEND_URL to your Render backend URL.");
+            }
+            throw new Error(`Unable to connect to backend at ${requestUrl}. Check server status.`);
+        }
 
         if (response.status === 401) {
             this.clearAuth();
             window.location.href = "/";
             return null;
+        }
+
+        if (!response.ok && window.location.hostname.includes("onrender.com") && (API_BASE_URL === window.location.origin)) {
+            throw new Error(`Endpoint ${url} (${response.status}) not found on frontend service. Please configure BACKEND_URL in Render environment variables pointing to your Render backend service.`);
         }
 
         const contentType = response.headers.get("content-type") || "";
@@ -54,14 +78,14 @@ const API = {
                 data = JSON.parse(text);
             } catch {
                 if (!response.ok) {
-                    throw new Error(text || "Request failed");
+                    throw new Error(text || `Server Error (${response.status})`);
                 }
                 throw new Error("Unexpected response format from server");
             }
         }
 
         if (!response.ok) {
-            throw new Error(data.detail || data.error || JSON.stringify(data));
+            throw new Error(data.detail || data.message || data.error || JSON.stringify(data));
         }
         return data;
     },

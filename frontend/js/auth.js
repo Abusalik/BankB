@@ -19,15 +19,7 @@ document.addEventListener("DOMContentLoaded", () => {
         btn.innerHTML = '<span class="spinner"></span> Signing in...';
 
         try {
-            const response = await fetch("/login", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ username, password }),
-            });
-
-            const data = await response.json();
-            if (!response.ok) throw new Error(data.detail || "Login failed");
-
+            const data = await API.post("/login", { username, password });
             API.setAuth(data.access_token, data.username);
             window.location.href = "/dashboard";
         } catch (err) {

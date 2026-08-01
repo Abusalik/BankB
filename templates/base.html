@@ -36,6 +36,10 @@
         </main>
     </div>
 
+    <script>
+        window.__BACKEND_URL__ = "{{ backend_url | default('') }}";
+    </script>
+    <script src="/frontend/js/config.js"></script>
     <script src="/frontend/js/app.js"></script>
     {% block scripts %}{% endblock %}
 </body>
