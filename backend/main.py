@@ -215,10 +215,11 @@ async def login(user: UserLogin):
         )
         row = cursor.fetchone()
 
-    if row is None or not verify_password(user.password, row["password_hash"]):
+    if row is None or not verify_password(user.password, row["password_hash"] if isinstance(row, dict) else row[1]):
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
-    token = create_access_token({"sub": user.username, "user_id": row["id"]})
+    user_id = row["id"] if isinstance(row, dict) else row[0]
+    token = create_access_token({"sub": user.username, "user_id": user_id})
     return TokenResponse(access_token=token, username=user.username)
 
 
