@@ -432,66 +432,6 @@ async def full_history(payload: Annotated[dict, Depends(get_current_user)]):
     return {"loans": loans, "frauds": frauds, "chats": chats}
 
 
-@app.get("/api/health")
-async def health_check():
-    """Diagnostic endpoint to verify HF_TOKEN and API connectivity."""
-    import asyncio
-    from backend.chatbot import get_token
-
-    hf_token = get_token()
-    result = {
-        "status": "ok",
-        "hf_token_set": bool(hf_token),
-        "hf_token_prefix": hf_token[:8] + "..." if hf_token else "(empty)",
-        "hf_token_length": len(hf_token),
-        "database": "postgres" if _is_postgres() else "sqlite",
-    }
-
-    if hf_token:
-        test_model = "mistralai/Mistral-7B-Instruct-v0.2"
-        test_msgs = [{"role": "user", "content": "Say hello in one word"}]
-
-        # Test 1: InferenceClient with provider="auto"
-        def _test_auto():
-            try:
-                from huggingface_hub import InferenceClient
-                client = InferenceClient(provider="auto", api_key=hf_token, timeout=15)
-                resp = client.chat_completion(model=test_model, messages=test_msgs, max_tokens=10)
-                return {"status": "ok", "response": resp.choices[0].message.content[:100]}
-            except Exception as e:
-                return {"status": "error", "error": str(e)[:300]}
-
-        # Test 2: InferenceClient with provider="featherless-ai"
-        def _test_featherless():
-            try:
-                from huggingface_hub import InferenceClient
-                client = InferenceClient(provider="featherless-ai", api_key=hf_token, timeout=15)
-                resp = client.chat_completion(model=test_model, messages=test_msgs, max_tokens=10)
-                return {"status": "ok", "response": resp.choices[0].message.content[:100]}
-            except Exception as e:
-                return {"status": "error", "error": str(e)[:300]}
-
-        # Test 3: Raw requests to router.huggingface.co
-        def _test_raw_router():
-            try:
-                import requests
-                url = "https://router.huggingface.co/featherless-ai/v1/chat/completions"
-                headers = {"Authorization": f"Bearer {hf_token}", "Content-Type": "application/json"}
-                payload = {"model": test_model, "messages": test_msgs, "max_tokens": 10}
-                res = requests.post(url, json=payload, headers=headers, timeout=15)
-                return {"status": res.status_code, "response": res.text[:300]}
-            except Exception as e:
-                return {"status": "error", "error": str(e)[:300]}
-
-        loop = asyncio.get_event_loop()
-        result["test_auto_provider"] = await loop.run_in_executor(None, _test_auto)
-        result["test_featherless"] = await loop.run_in_executor(None, _test_featherless)
-        result["test_raw_router"] = await loop.run_in_executor(None, _test_raw_router)
-    else:
-        result["hf_api_status"] = "skipped"
-        result["hf_api_response"] = "No HF_TOKEN configured"
-
-    return result
 
 if __name__ == "__main__":
     import uvicorn

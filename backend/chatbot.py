@@ -7,7 +7,7 @@ from functools import partial
 
 logger = logging.getLogger("bankingai")
 
-# Models to try - these work with inference providers (conversational task)
+# Models to try - these work with featherless-ai provider
 HF_MODELS = [
     "mistralai/Mistral-7B-Instruct-v0.2",
     "HuggingFaceH4/zephyr-7b-beta",
@@ -96,14 +96,12 @@ def get_token() -> str:
     return ""
 
 
-# ---------- Strategy 1: InferenceClient with provider="auto" ----------
-
-def _sync_hf_chat_auto_provider(model_name: str, messages: list, hf_token: str) -> str | None:
-    """Use InferenceClient with provider='auto' so HF picks the right backend."""
+def _sync_featherless_call(model_name: str, messages: list, hf_token: str) -> str | None:
+    """Use InferenceClient with provider='featherless-ai' (confirmed working)."""
     try:
         from huggingface_hub import InferenceClient
 
-        client = InferenceClient(provider="auto", api_key=hf_token, timeout=30)
+        client = InferenceClient(provider="featherless-ai", api_key=hf_token, timeout=30)
         response = client.chat_completion(
             model=model_name,
             messages=messages,
@@ -112,114 +110,40 @@ def _sync_hf_chat_auto_provider(model_name: str, messages: list, hf_token: str) 
         )
         text = response.choices[0].message.content.strip()
         if text:
-            logger.info("HF auto-provider (%s) success", model_name)
+            logger.info("featherless-ai (%s) success", model_name)
             return text
     except Exception as err:
-        logger.warning("HF auto-provider (%s) error: %s", model_name, str(err)[:200])
+        logger.warning("featherless-ai (%s) error: %s", model_name, str(err)[:200])
     return None
 
 
-# ---------- Strategy 2: InferenceClient with explicit provider ----------
+def _sync_raw_router_call(model_name: str, messages: list, hf_token: str) -> str | None:
+    """Direct HTTP to router.huggingface.co/featherless-ai (confirmed working)."""
+    import requests
 
-PROVIDERS = ["featherless-ai", "fireworks-ai", "together", "novita"]
+    url = "https://router.huggingface.co/featherless-ai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {hf_token}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": model_name,
+        "messages": messages,
+        "max_tokens": 250,
+        "temperature": 0.7,
+        "stream": False,
+    }
 
-def _sync_hf_chat_explicit_provider(
-    model_name: str, messages: list, hf_token: str
-) -> str | None:
-    """Try each known provider explicitly."""
-    from huggingface_hub import InferenceClient
-
-    for provider in PROVIDERS:
-        try:
-            client = InferenceClient(provider=provider, api_key=hf_token, timeout=30)
-            response = client.chat_completion(
-                model=model_name,
-                messages=messages,
-                max_tokens=250,
-                temperature=0.7,
-            )
-            text = response.choices[0].message.content.strip()
+    try:
+        res = requests.post(url, json=payload, headers=headers, timeout=30)
+        logger.info("raw-router (%s) status=%s", model_name, res.status_code)
+        if res.status_code == 200:
+            data = res.json()
+            text = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
             if text:
-                logger.info("HF provider=%s model=%s success", provider, model_name)
                 return text
-        except Exception as err:
-            logger.debug("HF provider=%s model=%s error: %s", provider, model_name, str(err)[:150])
-            continue
-    return None
-
-
-# ---------- Strategy 3: Raw HTTPS to router.huggingface.co ----------
-
-def _sync_raw_router_call(messages: list, hf_token: str) -> str | None:
-    """Direct HTTP call to router.huggingface.co which IS reachable from Render."""
-    import requests
-
-    url = "https://router.huggingface.co/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {hf_token}",
-        "Content-Type": "application/json",
-    }
-
-    for model_name in HF_MODELS:
-        try:
-            payload = {
-                "model": model_name,
-                "messages": messages,
-                "max_tokens": 250,
-                "temperature": 0.7,
-                "stream": False,
-            }
-            res = requests.post(url, json=payload, headers=headers, timeout=30)
-            logger.info("Raw router (%s) status=%s", model_name, res.status_code)
-            if res.status_code == 200:
-                data = res.json()
-                text = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-                if text:
-                    return text
-        except Exception as err:
-            logger.warning("Raw router (%s) error: %s", model_name, str(err)[:200])
-    return None
-
-
-# ---------- Strategy 4: Raw HTTPS to provider endpoints directly ----------
-
-PROVIDER_ENDPOINTS = [
-    ("featherless-ai", "https://router.huggingface.co/featherless-ai/v1/chat/completions"),
-    ("fireworks-ai", "https://router.huggingface.co/fireworks-ai/v1/chat/completions"),
-    ("novita", "https://router.huggingface.co/novita/v1/chat/completions"),
-]
-
-def _sync_raw_provider_call(messages: list, hf_token: str) -> str | None:
-    """Try specific provider endpoints through the router."""
-    import requests
-
-    headers = {
-        "Authorization": f"Bearer {hf_token}",
-        "Content-Type": "application/json",
-    }
-
-    for provider_name, endpoint_url in PROVIDER_ENDPOINTS:
-        for model_name in HF_MODELS[:2]:  # Try first 2 models per provider
-            try:
-                payload = {
-                    "model": model_name,
-                    "messages": messages,
-                    "max_tokens": 250,
-                    "temperature": 0.7,
-                    "stream": False,
-                }
-                res = requests.post(endpoint_url, json=payload, headers=headers, timeout=30)
-                logger.info("Provider %s (%s) status=%s", provider_name, model_name, res.status_code)
-                if res.status_code == 200:
-                    data = res.json()
-                    text = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-                    if text:
-                        return text
-                elif res.status_code in (401, 403):
-                    logger.warning("Auth error on %s: %s", provider_name, res.text[:100])
-                    break  # Don't try more models with same provider if auth fails
-            except Exception as err:
-                logger.warning("Provider %s (%s) error: %s", provider_name, model_name, str(err)[:200])
+    except Exception as err:
+        logger.warning("raw-router (%s) error: %s", model_name, str(err)[:200])
     return None
 
 
@@ -248,35 +172,21 @@ async def get_chat_response(message: str, context: dict | None = None) -> str:
 
     loop = asyncio.get_event_loop()
 
-    # Strategy 1: InferenceClient with provider="auto"
+    # Strategy 1: featherless-ai provider via InferenceClient (confirmed working)
     for model_name in HF_MODELS:
         result = await loop.run_in_executor(
-            None, partial(_sync_hf_chat_auto_provider, model_name, messages, hf_token)
+            None, partial(_sync_featherless_call, model_name, messages, hf_token)
         )
         if result:
             return result
 
-    # Strategy 2: InferenceClient with explicit providers
-    for model_name in HF_MODELS[:2]:
+    # Strategy 2: Raw HTTP to router.huggingface.co/featherless-ai (confirmed working)
+    for model_name in HF_MODELS:
         result = await loop.run_in_executor(
-            None, partial(_sync_hf_chat_explicit_provider, model_name, messages, hf_token)
+            None, partial(_sync_raw_router_call, model_name, messages, hf_token)
         )
         if result:
             return result
-
-    # Strategy 3: Raw HTTP to router.huggingface.co (which is reachable)
-    result = await loop.run_in_executor(
-        None, partial(_sync_raw_router_call, messages, hf_token)
-    )
-    if result:
-        return result
-
-    # Strategy 4: Raw HTTP to specific provider endpoints
-    result = await loop.run_in_executor(
-        None, partial(_sync_raw_provider_call, messages, hf_token)
-    )
-    if result:
-        return result
 
     logger.info("All HF API strategies failed. Falling back to local FAQ response.")
     return _local_response(message, context)
