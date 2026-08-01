@@ -432,6 +432,49 @@ async def full_history(payload: Annotated[dict, Depends(get_current_user)]):
     return {"loans": loans, "frauds": frauds, "chats": chats}
 
 
+@app.get("/api/health")
+async def health_check():
+    """Diagnostic endpoint to verify HF_TOKEN and API connectivity."""
+    import httpx
+    from backend.chatbot import get_token
+
+    hf_token = get_token()
+    result = {
+        "status": "ok",
+        "hf_token_set": bool(hf_token),
+        "hf_token_prefix": hf_token[:8] + "..." if hf_token else "(empty)",
+        "hf_token_length": len(hf_token),
+        "database": "postgres" if _is_postgres() else "sqlite",
+    }
+
+    if hf_token:
+        try:
+            headers = {
+                "Authorization": f"Bearer {hf_token}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": "Qwen/Qwen2.5-7B-Instruct",
+                "messages": [{"role": "user", "content": "Say hello"}],
+                "max_tokens": 10,
+            }
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                res = await client.post(
+                    "https://router.huggingface.co/hf-inference/v1/chat/completions",
+                    json=payload,
+                    headers=headers,
+                )
+                result["hf_api_status"] = res.status_code
+                result["hf_api_response"] = res.text[:300]
+        except Exception as err:
+            result["hf_api_status"] = "connection_error"
+            result["hf_api_response"] = str(err)
+    else:
+        result["hf_api_status"] = "skipped"
+        result["hf_api_response"] = "No HF_TOKEN configured"
+
+    return result
+
 if __name__ == "__main__":
     import uvicorn
 
