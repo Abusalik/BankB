@@ -435,7 +435,8 @@ async def full_history(payload: Annotated[dict, Depends(get_current_user)]):
 @app.get("/api/health")
 async def health_check():
     """Diagnostic endpoint to verify HF_TOKEN and API connectivity."""
-    import httpx
+    import asyncio
+    from functools import partial
     from backend.chatbot import get_token
 
     hf_token = get_token()
@@ -449,28 +450,41 @@ async def health_check():
 
     if hf_token:
         test_model = "mistralai/Mistral-7B-Instruct-v0.2"
-        try:
-            headers = {
-                "Authorization": f"Bearer {hf_token}",
-                "Content-Type": "application/json",
-                "x-wait-for-model": "true",
-            }
-            payload = {
-                "inputs": "<s>[INST] Say hello in one sentence. [/INST]",
-                "parameters": {"max_new_tokens": 20, "return_full_text": False},
-            }
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                res = await client.post(
-                    f"https://api-inference.huggingface.co/models/{test_model}",
-                    json=payload,
-                    headers=headers,
+
+        # Test 1: huggingface_hub InferenceClient
+        def _test_hf_hub():
+            try:
+                from huggingface_hub import InferenceClient
+                client = InferenceClient(model=test_model, token=hf_token, timeout=15)
+                resp = client.text_generation(
+                    "<s>[INST] Say hello [/INST]",
+                    max_new_tokens=10,
                 )
-                result["hf_api_model"] = test_model
-                result["hf_api_status"] = res.status_code
-                result["hf_api_response"] = res.text[:300]
-        except Exception as err:
-            result["hf_api_status"] = "connection_error"
-            result["hf_api_response"] = str(err)
+                return {"status": "ok", "response": resp[:100]}
+            except Exception as e:
+                return {"status": "error", "error": str(e)[:200]}
+
+        # Test 2: requests library direct
+        def _test_requests():
+            try:
+                import requests
+                url = f"https://api-inference.huggingface.co/models/{test_model}"
+                headers = {
+                    "Authorization": f"Bearer {hf_token}",
+                    "x-wait-for-model": "true",
+                }
+                payload = {
+                    "inputs": "<s>[INST] Say hello [/INST]",
+                    "parameters": {"max_new_tokens": 10, "return_full_text": False},
+                }
+                res = requests.post(url, json=payload, headers=headers, timeout=15)
+                return {"status": res.status_code, "response": res.text[:200]}
+            except Exception as e:
+                return {"status": "error", "error": str(e)[:200]}
+
+        loop = asyncio.get_event_loop()
+        result["hf_hub_test"] = await loop.run_in_executor(None, _test_hf_hub)
+        result["requests_test"] = await loop.run_in_executor(None, _test_requests)
     else:
         result["hf_api_status"] = "skipped"
         result["hf_api_response"] = "No HF_TOKEN configured"
