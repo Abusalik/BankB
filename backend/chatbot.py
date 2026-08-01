@@ -6,14 +6,15 @@ import httpx
 
 logger = logging.getLogger("bankingai")
 
-HF_ROUTER_URL = "https://router.huggingface.co/hf-inference/v1/chat/completions"
+# Direct inference API - works with free tier tokens
+HF_API_BASE = "https://api-inference.huggingface.co/models"
 
+# Small models that are warm and available on free serverless inference
 HF_MODELS = [
-    "Qwen/Qwen2.5-7B-Instruct",
+    "mistralai/Mistral-7B-Instruct-v0.2",
     "meta-llama/Llama-3.2-3B-Instruct",
-    "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+    "meta-llama/Meta-Llama-3-8B-Instruct",
     "HuggingFaceH4/zephyr-7b-beta",
-    "mistralai/Mistral-7B-Instruct-v0.3",
 ]
 
 BANKING_FAQ = {
@@ -97,12 +98,51 @@ def get_token() -> str:
     return ""
 
 
+async def _try_direct_inference(
+    model_name: str, prompt: str, hf_token: str
+) -> str | None:
+    """Try the direct /models/ inference endpoint for a single model."""
+    url = f"{HF_API_BASE}/{model_name}"
+    headers = {
+        "Authorization": f"Bearer {hf_token}",
+        "Content-Type": "application/json",
+        "x-wait-for-model": "true",
+    }
+    payload = {
+        "inputs": prompt,
+        "parameters": {"max_new_tokens": 250, "temperature": 0.7, "return_full_text": False},
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            res = await client.post(url, json=payload, headers=headers)
+            logger.info("HF Direct API (%s) status=%s", model_name, res.status_code)
+            if res.status_code == 200:
+                result = res.json()
+                if isinstance(result, list) and result:
+                    text = result[0].get("generated_text", "")
+                    # Strip prompt echo if present
+                    if "[/INST]" in text:
+                        text = text.split("[/INST]")[-1]
+                    text = text.strip()
+                    if text:
+                        return text
+            elif res.status_code == 503:
+                logger.info("HF model %s is loading, trying next...", model_name)
+            else:
+                logger.warning("HF Direct API (%s) %s: %s", model_name, res.status_code, res.text[:200])
+    except Exception as err:
+        logger.warning("HF Direct API (%s) error: %s", model_name, err)
+
+    return None
+
+
 async def get_chat_response(message: str, context: dict | None = None) -> str:
     """Get chatbot response from Hugging Face API or local fallback."""
     hf_token = get_token()
 
     if not hf_token:
-        logger.info("HF_TOKEN environment variable is not set. Using local FAQ fallback.")
+        logger.info("HF_TOKEN not set. Using local FAQ fallback.")
         return _local_response(message, context)
 
     system_prompt = (
@@ -113,94 +153,16 @@ async def get_chat_response(message: str, context: dict | None = None) -> str:
         "Keep responses under 150 words."
     )
 
-    context_text = f"\nUser Context: {context}" if context else ""
+    context_text = f"\nUser context: {context}" if context else ""
 
-    headers = {
-        "Authorization": f"Bearer {hf_token}",
-        "Content-Type": "application/json",
-        "x-wait-for-model": "true",
-    }
+    # Build the prompt in Mistral/Llama instruction format
+    prompt = f"<s>[INST] {system_prompt}{context_text}\n\nUser: {message} [/INST]"
 
-    last_error_status = None
-    last_error_text = ""
-
-    # Attempt 1: Hugging Face Serverless Router Chat Completions API with fallback models
+    # Try each model until one succeeds
     for model_name in HF_MODELS:
-        router_payload = {
-            "model": model_name,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"{message}{context_text}"},
-            ],
-            "max_tokens": 200,
-            "temperature": 0.7,
-        }
+        result = await _try_direct_inference(model_name, prompt, hf_token)
+        if result:
+            return result
 
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                res = await client.post(HF_ROUTER_URL, json=router_payload, headers=headers)
-                if res.status_code == 200:
-                    data = res.json()
-                    if "choices" in data and len(data["choices"]) > 0:
-                        content = data["choices"][0].get("message", {}).get("content", "").strip()
-                        if content:
-                            return content
-                else:
-                    last_error_status = res.status_code
-                    last_error_text = res.text[:200]
-                    logger.warning(
-                        "HuggingFace Router API (%s) status %s: %s",
-                        model_name,
-                        res.status_code,
-                        res.text[:200],
-                    )
-        except Exception as err:
-            logger.warning("HuggingFace Router API (%s) error: %s", model_name, err)
-
-    # Attempt 2: Direct Model Inference endpoints
-    for model_name in HF_MODELS:
-        direct_url = f"https://api-inference.huggingface.co/models/{model_name}"
-        direct_payload = {
-            "inputs": f"<s>[INST] {system_prompt}{context_text}\n\nUser Question: {message} [/INST]",
-            "parameters": {"max_new_tokens": 200, "temperature": 0.7},
-        }
-
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                res = await client.post(direct_url, json=direct_payload, headers=headers)
-                if res.status_code == 200:
-                    result = res.json()
-                    if isinstance(result, list) and result:
-                        text = result[0].get("generated_text", "")
-                        if "[/INST]" in text:
-                            text = text.split("[/INST]")[-1]
-                        text = text.strip()
-                        if text:
-                            return text
-                else:
-                    last_error_status = res.status_code
-                    last_error_text = res.text[:200]
-                    logger.warning(
-                        "HuggingFace Direct API (%s) status %s: %s",
-                        model_name,
-                        res.status_code,
-                        res.text[:200],
-                    )
-        except Exception as err:
-            logger.warning("HuggingFace Direct API (%s) error: %s", model_name, err)
-
-    # Diagnostic feedback if token was supplied but rejected by HuggingFace
-    if last_error_status == 401:
-        return (
-            "[HF Token Error]: The provided HF_TOKEN was rejected by Hugging Face (401 Unauthorized). "
-            "Please verify that your token starts with 'hf_' and has read permissions. "
-            "Fallback response: " + _local_response(message, context)
-        )
-    elif last_error_status == 403:
-        return (
-            "[HF Permission Error]: The provided HF_TOKEN lacks access to Hugging Face models (403 Forbidden). "
-            "Fallback response: " + _local_response(message, context)
-        )
-
-    logger.info("HuggingFace API calls unfulfilled. Falling back to local FAQ response.")
+    logger.info("All HF API calls failed. Falling back to local FAQ response.")
     return _local_response(message, context)

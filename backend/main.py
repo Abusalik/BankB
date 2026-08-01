@@ -448,22 +448,24 @@ async def health_check():
     }
 
     if hf_token:
+        test_model = "mistralai/Mistral-7B-Instruct-v0.2"
         try:
             headers = {
                 "Authorization": f"Bearer {hf_token}",
                 "Content-Type": "application/json",
+                "x-wait-for-model": "true",
             }
             payload = {
-                "model": "Qwen/Qwen2.5-7B-Instruct",
-                "messages": [{"role": "user", "content": "Say hello"}],
-                "max_tokens": 10,
+                "inputs": "<s>[INST] Say hello in one sentence. [/INST]",
+                "parameters": {"max_new_tokens": 20, "return_full_text": False},
             }
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=15.0) as client:
                 res = await client.post(
-                    "https://router.huggingface.co/hf-inference/v1/chat/completions",
+                    f"https://api-inference.huggingface.co/models/{test_model}",
                     json=payload,
                     headers=headers,
                 )
+                result["hf_api_model"] = test_model
                 result["hf_api_status"] = res.status_code
                 result["hf_api_response"] = res.text[:300]
         except Exception as err:
