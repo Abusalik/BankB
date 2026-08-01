@@ -9,10 +9,11 @@ logger = logging.getLogger("bankingai")
 HF_ROUTER_URL = "https://router.huggingface.co/hf-inference/v1/chat/completions"
 
 HF_MODELS = [
+    "Qwen/Qwen2.5-7B-Instruct",
+    "meta-llama/Llama-3.2-3B-Instruct",
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
     "HuggingFaceH4/zephyr-7b-beta",
     "mistralai/Mistral-7B-Instruct-v0.3",
-    "google/gemma-2-2b-it",
-    "mistralai/Mistral-7B-Instruct-v0.2",
 ]
 
 BANKING_FAQ = {
@@ -90,7 +91,7 @@ def _local_response(message: str, context: dict | None = None) -> str:
 def get_token() -> str:
     """Check common environment variable keys for HuggingFace token."""
     for key in ["HF_TOKEN", "HB_TOKEN", "HUGGINGFACE_TOKEN", "HUGGING_FACE_TOKEN"]:
-        val = os.getenv(key, "").strip()
+        val = os.getenv(key, "").strip().strip("'\"")
         if val:
             return val
     return ""
@@ -120,34 +121,43 @@ async def get_chat_response(message: str, context: dict | None = None) -> str:
         "x-wait-for-model": "true",
     }
 
-    # Attempt 1: Hugging Face Serverless Router Chat Completions API
-    router_payload = {
-        "model": "mistralai/Mistral-7B-Instruct-v0.3",
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"{message}{context_text}"},
-        ],
-        "max_tokens": 200,
-        "temperature": 0.7,
-    }
+    last_error_status = None
+    last_error_text = ""
 
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            res = await client.post(HF_ROUTER_URL, json=router_payload, headers=headers)
-            if res.status_code == 200:
-                data = res.json()
-                if "choices" in data and len(data["choices"]) > 0:
-                    content = data["choices"][0].get("message", {}).get("content", "").strip()
-                    if content:
-                        return content
-            else:
-                logger.warning(
-                    "HuggingFace Router API status %s: %s", res.status_code, res.text[:200]
-                )
-    except Exception as err:
-        logger.warning("HuggingFace Router API connection error: %s", err)
+    # Attempt 1: Hugging Face Serverless Router Chat Completions API with fallback models
+    for model_name in HF_MODELS:
+        router_payload = {
+            "model": model_name,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"{message}{context_text}"},
+            ],
+            "max_tokens": 200,
+            "temperature": 0.7,
+        }
 
-    # Attempt 2: Direct Model Inference endpoints with model fallbacks & x-wait-for-model
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                res = await client.post(HF_ROUTER_URL, json=router_payload, headers=headers)
+                if res.status_code == 200:
+                    data = res.json()
+                    if "choices" in data and len(data["choices"]) > 0:
+                        content = data["choices"][0].get("message", {}).get("content", "").strip()
+                        if content:
+                            return content
+                else:
+                    last_error_status = res.status_code
+                    last_error_text = res.text[:200]
+                    logger.warning(
+                        "HuggingFace Router API (%s) status %s: %s",
+                        model_name,
+                        res.status_code,
+                        res.text[:200],
+                    )
+        except Exception as err:
+            logger.warning("HuggingFace Router API (%s) error: %s", model_name, err)
+
+    # Attempt 2: Direct Model Inference endpoints
     for model_name in HF_MODELS:
         direct_url = f"https://api-inference.huggingface.co/models/{model_name}"
         direct_payload = {
@@ -168,6 +178,8 @@ async def get_chat_response(message: str, context: dict | None = None) -> str:
                         if text:
                             return text
                 else:
+                    last_error_status = res.status_code
+                    last_error_text = res.text[:200]
                     logger.warning(
                         "HuggingFace Direct API (%s) status %s: %s",
                         model_name,
@@ -175,7 +187,20 @@ async def get_chat_response(message: str, context: dict | None = None) -> str:
                         res.text[:200],
                     )
         except Exception as err:
-            logger.warning("HuggingFace Direct API (%s) connection error: %s", model_name, err)
+            logger.warning("HuggingFace Direct API (%s) error: %s", model_name, err)
+
+    # Diagnostic feedback if token was supplied but rejected by HuggingFace
+    if last_error_status == 401:
+        return (
+            "[HF Token Error]: The provided HF_TOKEN was rejected by Hugging Face (401 Unauthorized). "
+            "Please verify that your token starts with 'hf_' and has read permissions. "
+            "Fallback response: " + _local_response(message, context)
+        )
+    elif last_error_status == 403:
+        return (
+            "[HF Permission Error]: The provided HF_TOKEN lacks access to Hugging Face models (403 Forbidden). "
+            "Fallback response: " + _local_response(message, context)
+        )
 
     logger.info("HuggingFace API calls unfulfilled. Falling back to local FAQ response.")
     return _local_response(message, context)
